@@ -1,0 +1,415 @@
+#library R package
+library("multtest")
+library("Seurat")
+library("dplyr")
+library("mindr")
+library("tidyverse")
+library("patchwork")
+library("future")
+
+#read data and use harmony to integrate data 
+devtools::install_github("immunogenomics/harmony")
+library(harmony)
+
+scRNA_NC <- Read10X("NC/")
+scRNA_Sh <- Read10X("SH/")
+scRNA_NC <- CreateSeuratObject(scRNA_NC ,project="NC",min.cells = 3, min.features = 200)
+scRNA_Sh <- CreateSeuratObject(scRNA_Sh ,project="Sh",min.cells = 3, min.features = 200)
+
+#combind two SeuratObject
+scRNA_harmony <- merge(scRNA_NC, y=c(scRNA_Sh)) 
+scRNA_harmony <- NormalizeData(scRNA_harmony) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA(verbose=FALSE)
+system.time({scRNA_harmony <- RunHarmony(scRNA_harmony, group.by.vars = "orig.ident")})
+
+
+#UMAP clustering
+scRNA_harmony <- FindNeighbors(scRNA_harmony, reduction = "harmony", dims = 1:15) %>% FindClusters(resolution = 0.5)
+scRNA_harmony <- RunUMAP(scRNA_harmony, reduction = "harmony", dims = 1:16)
+scRNA_harmony <- RunTSNE(scRNA_harmony, reduction = "harmony", dims = 1:16)
+
+#Dimplot
+DimPlot(scRNA_harmony, reduction = "umap",label = T) 
+DimPlot(scRNA_harmony, reduction = "umap", group.by='orig.ident') 
+DimPlot(scRNA_harmony, reduction = "tsne",label = T) 
+DimPlot(scRNA_harmony, reduction = "tsne", group.by='orig.ident') 
+
+#################################################################################################################
+#annotation
+markers <- FindAllMarkers(object = scRNA_harmony, test.use = "wilcox",
+                          only.pos = TRUE, 
+                          logfc.threshold = 0.25) 
+
+#View Results
+allmarkers <- markers %>% dplyr::select(gene, everything()) %>% subset(p_val < 0.05)
+top10 <- allmarkers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+
+#Rename clusters
+scRNA1 <- RenameIdents(scRNA_harmony, 
+                       "0" = "Immune_cells", 
+                       "1" = "Fibroblast",
+                       "2" = "Fibroblasts",
+                       "3" = "Epithelial_cells",
+                       "4" = "Basal_cells",
+                       "5" = "Fibroblast",
+                       "6" = "Immune_cells",
+                       "7" = "Immune_cells",
+                       "8" = "Epithelial_cells",
+                       "9" = "Endothelial_cells",
+                       "10" = "Immune_cells",
+                       "11" = "Immune_cells",
+                       "12" = "Immune_cells",
+                       "13" = "Immune_cells",
+                       "14" = "Immune_cells",
+                       "15" = "Endothelial_cells")
+
+a <- data.frame(gene = c("Krt14","Epcam","Muc1","Cd24","Anpep","Krt3"))#epithelial
+a <- data.frame(gene = c("Pxk","Cd74","Cd79a","Cd79b","Ighm"))#b cells
+a <- data.frame(gene = c("Cd3d","Cd3g","Trbc2","Cd3e","LTB"))#t cells
+a <- data.frame(gene = c("Nkg7","Klrf1","Gnly","Klrd1","Ncr1"))#nk cells
+a <- data.frame(gene = c("Cd68","Fcgr1","Naaa","Lyz2","Jaml"))#macrophages cells
+a <- data.frame(gene = c("Cd93","Vwf","Emcn","Egfl7","Flt1","Igfbp7","Pecam1"))#endothelial cells
+a <- data.frame(gene = c("Ccr4","Cd4","Il13","Cd3g","Cd28"))#t helper cells
+a <- data.frame(gene = c("Ccr7","Cd2","Ptprc"))#t memory cells
+a <- data.frame(gene = c("Trac","Cd8a","Gamb"))#t cytotoxic cells
+a <- data.frame(gene = c("Foxp3","Ikzf2","Entpd1","Il2ra"))#t regulatory cells
+a <- data.frame(gene = c("Ptprc"))
+merge(a, markers, by.x = 1, by.y = 7)
+
+prop.table(table(Idents(scRNA1),scRNA_harmony$orig.ident))
+prop.table(table(Idents(scRNA1_NC),scRNA1_NC$orig.ident))
+prop.table(table(Idents(scRNA1_SH),scRNA1_SH$orig.ident))
+
+
+scRNA1@meta.data$celltype = "NA" 
+for(i in 1:nrow(celltype)){
+  scRNA1@meta.data[which(scRNA1@meta.data$seurat_clusters == celltype$ClusterID[i]),'celltype'] <- celltype$celltype[i]}
+DimPlot(scRNA1, group.by="class", label=T, label.size=5, reduction='tsne')
+
+#Extract immune cells for further dimensionality reduction and clustering
+table(scRNA1@meta.data$celltype)
+Idents(scRNA1) <- scRNA1@meta.data$celltype
+scRNA_IC <-  subset(scRNA1, ident = "Immune cells")
+DimPlot(scRNA_IC)
+scRNA_IC <- RunPCA(scRNA_IC)
+ElbowPlot(scRNA_IC, ndims = 50)
+pc.num = 1:13  
+scRNA_IC <- FindNeighbors(scRNA_IC, dims = pc.num)
+scRNA_IC <- FindClusters(scRNA_IC, resolution = 0.9) 
+scRNA_IC <- RunTSNE(scRNA_IC, dims = pc.num)
+DimPlot(scRNA_IC,reduction = "tsne", label = TRUE)
+scRNA_IC <- RunUMAP(scRNA_IC, dims = pc.num)
+DimPlot(scRNA_IC,reduction = "umap")
+
+#Annotation
+markers_IC <- FindAllMarkers(object = scRNA_IC, test.use = "wilcox",
+                             only.pos = TRUE,    
+                             logfc.threshold = 0.25)  
+write.csv(markers_IC, file = "Immune_cells markers.csv")
+#View results
+markers_IC <- markers_IC %>% dplyr::select(gene, everything()) %>% subset(p_val < 0.05)
+top10 <- allmarkers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+
+#Identifying different immune cells
+a <- data.frame(gene = c("Ccr4","Cd4","Il13","Cd3e","Ccr5"))#t helper cells
+a <- data.frame(gene = c("Ccr7","Cd2","Ptprc","Lef1","Enpp1"))#t memory cells
+a <- data.frame(gene = c("Trac","Cd8a","Gzmb","Cd2","Cd5","Cd69","Cd28","Cd8b"))#t cytotoxic cells
+a <- data.frame(gene = c("Ikzf2","Foxp3","Entpd1","Il2ra","Itgae","Folr1"))#t regulatory cells
+a <- data.frame(gene = c("Icos","Pdcd1","Bcl6","Cd200","P2rx7"))#t follicular helper cells
+a <- data.frame(gene = c("Pxk","Cd74","Cd79a","Cd79b","Ighm"))#b cells
+a <- data.frame(gene = c("Nkg7","Klrf1","Gnly","Klrd1","Ncr1"))#nk cells
+a <- data.frame(gene = c("Cd68","Fcgr1","Lyz2","Cxcl16","Tyrobp"))#macrophages cell
+a <- data.frame(gene = c("Itgax","Zbtb46","Lamp3","Cx3cr1","Itgam"))#DC cells
+a <- data.frame(gene = c("Cd4","Cd3e","Foxp3"))
+merge(a, markers_IC, by.x = 1, by.y = 1)
+merge(a, top10, by.x = 1, by.y = 1)
+#rename cluster
+scRNA_IC <- RenameIdents(scRNA_IC, 
+                         "0" = "Macrophages cells", 
+                         "1" = "Macrophages cells",
+                         "2" = "Macrophages cells",
+                         "3" = "B cells",
+                         "4" = "CD4+ T cells",
+                         "5" = "Dendritic cells",
+                         "6" = "CD8+ T cells",
+                         "7" = "CD4+ T cells",
+                         "8" = "CD8+ T cells",
+                         "9" = "B cells",
+                         "10" = "Macrophages cells",
+                         "11" = "CD8+ T cells",
+                         "12" = "CD8+ T cells",
+                         "13" = "NK cells",
+                         "14" = "NK cells",
+                         "15" = "Dendritic cells",
+                         "16" = "Treg cells",
+                         "17" = "T memory cells")
+Idents(scRNA_IC) <- scRNA_IC@meta.data$seurat_clusters
+
+
+celltype <- edit(celltype)
+scRNA_IC@meta.data$class2 = "NA" 
+for(i in 1:nrow(celltype)){
+  scRNA_IC@meta.data[which(scRNA_IC@meta.data$seurat_clusters == celltype$ClusterID[i]),'class2'] <- celltype$celltype[i]}
+
+Idents(scRNA_IC) <- scRNA_IC@meta.data$class2
+Idents(scRNA_IC) <- scRNA_IC@meta.data$orig.ident
+DimPlot(scRNA_IC, 
+        split.by = "orig.ident",
+        reduction = "tsne",
+        pt.size = 0.3,
+        cols = c('CD8+ T cells' = "#f00056",
+                 'Treg cells' = "#a4e2c6",
+                 'CD4+ T cells' = "#eacd76",
+                 'Macrophages' = "#8d4bbb",
+                 'Dendritic cells' = "#065279",
+                 'NK cells' = "#96ce54",
+                 'Unknown' = "#bbcdc5",
+                 'B cells' = "#b36d61"))
+scRNA_NC <- subset(scRNA_IC, ident = "NC")
+scRNA_SH <- subset(scRNA_IC, ident = "Sh")
+Idents(scRNA_NC) <- scRNA_NC@meta.data$class2
+Idents(scRNA_SH) <- scRNA_SH@meta.data$class2
+prop.table(table(Idents(scRNA_IC),scRNA_IC$orig.ident))
+bar1<- as.data.frame(prop.table(table(Idents(scRNA_NC),scRNA_NC$orig.ident)))
+bar2<- as.data.frame(prop.table(table(Idents(scRNA_SH),scRNA_SH$orig.ident)))
+
+#barplot
+library(ggplot2)
+bar <- rbind(bar1,bar2)
+colnames(bar) <- c("Cell type","Group","Frequency")
+bar$`Cell type` <- factor(bar$`Cell type`, levels = c("CD8+ T cells","CD4+ T cells","Treg cells","B cells",
+                                                      "NK cells","Dendritic cells","Macrophages",
+                                                      "Unknown"))
+ggplot(bar)+
+  geom_bar(aes(x = Group,y = Frequency, fill = `Cell type`),stat = "identity")+
+  theme_bw()+
+  scale_fill_manual(values = c('CD8+ T cells'="#FB2E21",
+                               'CD4+ T cells'="#F39C12",
+                               'Treg cells'="#F1C40F",
+                               'B cells'="#2ECC71",
+                               'NK cells'="#1ABC9C",
+                               'Dendritic cells'="#5DADE2",
+                               'Macrophages'="#9B59B6",
+                               'Unknown'="grey"))
+############################################################################################
+#extract CD8 T cells
+CD8 <- subset(scRNA_IC, idents = "CD8+ T cells")
+DimPlot(CD8,reduction = "tsne")
+data_CD8 <- data.frame(GetAssayData(CD8)) #Extract sparse matrix
+
+#run scoring process
+score <- read.csv("score.csv",header = FALSE)
+data.1 <- merge(score, data_CD8,  by.x = 1, by.y = 0)
+data_1 <- data.1 %>% distinct(V1, .keep_all = TRUE)
+rownames(data_1) <- data_1$V1
+data_1 <- data_1[,-1]
+score <- data.frame(data_1[,1])
+rownames(score) <- rownames(data_1)
+data_1 <- data_1[,-1]
+for (i in 1:length(rownames(data_1))) {
+  if (rownames(data_1)[i] == rownames(score)[i]) {
+    data_2[i,] <- data_1[i,] * score[i,1]
+  }
+}
+data_2 <- rbind(data_2, Total = colSums(data_2, na.rm = TRUE))#对列求和
+save(data_2, file = "CD8 score.rdata")
+
+ref <- t(data.frame(data_2[274,]))
+CD8@meta.data <- cbind(CD8@meta.data, ref)
+
+ggplot(b)+
+  geom_boxplot(aes(x = seurat_clusters, y = Total, fill = orig.ident))
+
+data_CD8 <- t(data_CD8)
+
+#Dimension reduction clustering of CD8
+CD8 <- RunPCA(CD8)
+ElbowPlot(CD8, ndims = 50)
+pc.num = 1:13   #choose 13 dimension pc
+CD8 <- FindNeighbors(CD8, dims = pc.num)
+CD8 <- FindClusters(CD8, resolution = 0.9)
+CD8 <- RunTSNE(CD8, dims = pc.num)
+DimPlot(CD8,reduction = "tsne")
+CD8 <- RunUMAP(CD8, dims = pc.num)
+DimPlot(CD8,reduction = "umap")
+CD8markers <- FindAllMarkers(object = CD8, test.use = "wilcox",
+                             only.pos = TRUE, 
+                             logfc.threshold = 0.25)
+a <- data.frame(gene = c("Pdcd1","Havcr2","Lag3","Cd226","Ifng","Gzmb"))
+merge(a, CD8markers, by.x = 1, by.y = 7)
+
+############################################Cell chat###################################### 
+#Extract epithelial cells for continued grouping and dimensionality reduction
+scRNA_EP <- subset(scRNA1, idents = "Epithelial cells")
+scRNA_EP <- RunPCA(scRNA_EP)
+ElbowPlot(scRNA_EP, ndims = 50)
+pc.num = 1:13 
+scRNA_EP <- FindNeighbors(scRNA_EP, dims = pc.num) 
+scRNA_EP <- FindClusters(scRNA_EP, resolution = 0.9) 
+scRNA_EP <- RunTSNE(scRNA_EP, dims = pc.num)
+DimPlot(scRNA_EP,reduction = "tsne")
+scRNA_EP <- RunUMAP(scRNA_EP, dims = pc.num)
+DimPlot(scRNA_EP,reduction = "umap")
+
+#Run interfnv to analyze copy number
+matrix <- as.data.frame(scRNA_EP@assays[["RNA"]]@counts)
+meta <- scRNA_EP@meta.data
+anno <- as.data.frame(meta[,5], row.names = rownames(meta))
+anno$cells <- rownames(anno)
+anno <- anno[,c(2,1)]
+groupinfo <- data.frame(v1 = rownames(meta),
+                        v2 = c(scRNA_EP$seurat_clusters))
+library(data.table)
+fwrite(matrix, file = "matrix.matrix", row.names = T, sep = "\t", quote = FALSE)
+fwrite(anno, file = "anno.txt", row.names = T, sep = "\t", quote = FALSE)
+fwrite(groupinfo, file = "group.txt", row.names = T, sep = "\t", quote = FALSE)
+
+
+library(infercnv)
+infercnv_obj <- CreateInfercnvObject(raw_counts_matrix = "matrix.matrix",
+                                     annotations_file = "anno.txt",
+                                     delim="\t",
+                                     gene_order_file="gene_position.txt",
+                                     ref_group_names = NULL)
+infercnv_obj <- infercnv::run(infercnv_obj,
+                              cutoff = 1, 
+                              out_dir = "infercnv",
+                              cluster_by_groups = TRUE, 
+                              denoise = TRUE,
+                              HMM = TRUE,
+                              num_threads = 4)
+Idents(scRNA_EP) <- scRNA_EP@meta.data$seurat_clusters
+scRNA_EP <- RenameIdents(scRNA_EP, 
+                         "0" = "Tumor cells", 
+                         "1" = "Epithelial cells",
+                         "2" = "Epithelial cells",
+                         "3" = "Tumor cells",
+                         "4" = "Epithelial cells",
+                         "5" = "Epithelial cells",
+                         "6" = "Tumor cells",
+                         "7" = "Tumor cells",
+                         "8" = "Tumor cells",
+                         "9" = "Epithelial cells",
+                         "10" = "Tumor cells",
+                         "11" = "Tumor cells")
+
+refdata <- data.frame(ClusterID = c(0:11),
+                      celltype = c("Tumor cells", 
+                                   "Epithelial cells",
+                                   "Epithelial cells",
+                                   "Tumor cells",
+                                   "Epithelial cells",
+                                   "Epithelial cells",
+                                   "Tumor cells",
+                                   "Tumor cells",
+                                   "Tumor cells",
+                                   "Epithelial cells",
+                                   "Tumor cells",
+                                   "Tumor cells"))
+
+scRNA_EP@meta.data$class2 = "NA" #Create celltype column
+for(i in 1:nrow(refdata)){
+  scRNA_EP@meta.data[which(scRNA_EP@meta.data$seurat_clusters == refdata$ClusterID[i]),'class2'] <- refdata$celltype[i]}
+#Merge IC with tumor
+Idents(scRNA_EP) <- scRNA_EP@meta.data$class2
+scRNA_T <- subset(scRNA_EP, ident = "Tumor cells")
+scRNAa <- merge(scRNA_IC, y = scRNA_T) 
+save(scRNA, file = "cell chat pre data.rdata")
+
+library(dplyr)
+library(CellChat)
+library(tidyverse)
+library(ggalluvial)
+library(Seurat)
+library(data.table)
+library(ggsci)
+library(future)
+
+#Create cellchat object and annotated seurat object
+#Extract expression matrix and cell classification information
+data.input <- GetAssayData(scRNAa, assay = "RNA", slot = "data")
+identity <- subset(scRNAa@meta.data, select = "class2")
+cellchat <- createCellChat(object = data.input, meta = identity,  group.by = "class2")
+CellChatDB <- CellChatDB.mouse
+showDatabaseCategory(CellChatDB)
+
+#Filtering
+glimpse(CellChatDB$interaction) 
+CellChatDB$interaction[1:4,1:4]
+head(CellChatDB$cofactor)
+head(CellChatDB$complex)
+head(CellChatDB$geneInfo)
+unique(CellChatDB$interaction$annotation) #View what are the sides of cell interactions
+
+# use Secreted Signaling for cell-cell communication analysis
+#CellChatDB.use <- subsetDB(CellChatDB, search = "Secreted Signaling")
+#cellchat@DB <- CellChatDB.use # set the used database in the object
+
+###Preprocess expression data
+##Subset expression data of signaling genes to save computational costs
+CellChatDB.use <- CellChatDB
+
+which(CellChatDB.use[["interaction"]]$ligand == "H2-BI") # 1887
+CellChatDB.use[["interaction"]] <- CellChatDB.use[["interaction"]][-1887,]
+which(CellChatDB.use[["interaction"]]$ligand == "H2-Ea-ps") #1900
+CellChatDB.use[["interaction"]] <- CellChatDB.use[["interaction"]][-1900,]
+cellchat@DB <-CellChatDB.use
+cellchat <- subsetData(cellchat)
+
+#Subset expression data of signaling genes to save computational costs
+cellchat <- identifyOverExpressedGenes(cellchat)
+#Identify interacting ligand-receptor pairs
+cellchat <- identifyOverExpressedInteractions(cellchat)
+
+#Project ligands and receptors to the PPI network
+cellchat <- projectData(cellchat, PPI.mouse)
+
+#########################################Interaction inference###################################
+##1、Computing communication probabilities to infer communication networks of cell interactions
+cellchat <- computeCommunProb(cellchat, raw.use = TRUE)
+cellchat <- filterCommunication(cellchat, min.cells = 3)
+computeAveExpr(cellchat, 
+               features = c("CXCL12","CXCR4"), 
+               type = "truncatedMean", trim = 0.1) 
+df.net <- subsetCommunication(cellchat)
+
+#Screening for receptor ligands or signaling pathways
+df.net <- subsetCommunication(cellchat, sources.use = c(1,2), targets.use = c(4,5)) 
+df.net <- subsetCommunication(cellchat, signaling = c("WNT", "TGFb"))
+
+##2、Inferring intercellular communication at the signaling pathway level
+cellchat <- computeCommunProbPathway(cellchat)
+##Communication probabilities are aggregated to calculate the aggregate communication network between cells
+cellchat <- aggregateNet(cellchat)
+
+###################################Visualization#######################################
+##3、#Computational Aggregation Cell Interaction Communication Network
+groupSize <- as.numeric(table(cellchat@idents))
+par(mfrow = c(1,2), xpd = TRUE)
+netVisual_circle(cellchat@net$count, 
+                 vertex.weight = groupSize, 
+                 weight.scale = T, 
+                 label.edge= F, 
+                 title.name = "Number of interactions")
+#Visualization of interaction weights
+netVisual_circle(cellchat@net$weight, 
+                 vertex.weight = groupSize, 
+                 weight.scale = T, 
+                 label.edge= F, 
+                 title.name = "Interaction weights/strength")
+
+mat <- cellchat@net$weight
+par(mfrow = c(3,3), xpd = TRUE)  
+for (i in 1:nrow(mat)) {
+  mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+
+mat <- cellchat@net$count
+par(mfrow = c(4,3), xpd = FALSE)
+for (i in 1:nrow(mat)) {
+  mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+
