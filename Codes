@@ -62,23 +62,9 @@ scRNA1 <- RenameIdents(scRNA_harmony,
                        "14" = "Immune_cells",
                        "15" = "Endothelial_cells")
 
-a <- data.frame(gene = c("Krt14","Epcam","Muc1","Cd24","Anpep","Krt3"))#epithelial
-a <- data.frame(gene = c("Pxk","Cd74","Cd79a","Cd79b","Ighm"))#b cells
-a <- data.frame(gene = c("Cd3d","Cd3g","Trbc2","Cd3e","LTB"))#t cells
-a <- data.frame(gene = c("Nkg7","Klrf1","Gnly","Klrd1","Ncr1"))#nk cells
-a <- data.frame(gene = c("Cd68","Fcgr1","Naaa","Lyz2","Jaml"))#macrophages cells
-a <- data.frame(gene = c("Cd93","Vwf","Emcn","Egfl7","Flt1","Igfbp7","Pecam1"))#endothelial cells
-a <- data.frame(gene = c("Ccr4","Cd4","Il13","Cd3g","Cd28"))#t helper cells
-a <- data.frame(gene = c("Ccr7","Cd2","Ptprc"))#t memory cells
-a <- data.frame(gene = c("Trac","Cd8a","Gamb"))#t cytotoxic cells
-a <- data.frame(gene = c("Foxp3","Ikzf2","Entpd1","Il2ra"))#t regulatory cells
-a <- data.frame(gene = c("Ptprc"))
-merge(a, markers, by.x = 1, by.y = 7)
-
 prop.table(table(Idents(scRNA1),scRNA_harmony$orig.ident))
 prop.table(table(Idents(scRNA1_NC),scRNA1_NC$orig.ident))
 prop.table(table(Idents(scRNA1_SH),scRNA1_SH$orig.ident))
-
 
 scRNA1@meta.data$celltype = "NA" 
 for(i in 1:nrow(celltype)){
@@ -88,13 +74,13 @@ DimPlot(scRNA1, group.by="class", label=T, label.size=5, reduction='tsne')
 #Extract immune cells for further dimensionality reduction and clustering
 table(scRNA1@meta.data$celltype)
 Idents(scRNA1) <- scRNA1@meta.data$celltype
-scRNA_IC <-  subset(scRNA1, ident = "Immune cells")
+scRNA_IC <-  subset(scRNA1, ident = "Immune_cells")
 DimPlot(scRNA_IC)
 scRNA_IC <- RunPCA(scRNA_IC)
 ElbowPlot(scRNA_IC, ndims = 50)
 pc.num = 1:13  
 scRNA_IC <- FindNeighbors(scRNA_IC, dims = pc.num)
-scRNA_IC <- FindClusters(scRNA_IC, resolution = 0.9) 
+scRNA_IC <- FindClusters(scRNA_IC, resolution = 0.5) 
 scRNA_IC <- RunTSNE(scRNA_IC, dims = pc.num)
 DimPlot(scRNA_IC,reduction = "tsne", label = TRUE)
 scRNA_IC <- RunUMAP(scRNA_IC, dims = pc.num)
@@ -143,8 +129,6 @@ scRNA_IC <- RenameIdents(scRNA_IC,
                          "16" = "Treg cells",
                          "17" = "T memory cells")
 Idents(scRNA_IC) <- scRNA_IC@meta.data$seurat_clusters
-
-
 celltype <- edit(celltype)
 scRNA_IC@meta.data$class2 = "NA" 
 for(i in 1:nrow(celltype)){
